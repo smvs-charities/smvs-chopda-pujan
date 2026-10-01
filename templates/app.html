@@ -2702,6 +2702,7 @@
         if(document.getElementById('membersTableBody')&&document.getElementById('filterSearch')){
             paintMemberRows(members);
             enhanceTables(document.getElementById('pageBody'));
+            initSankalptionTooltips();
             return;
         }
         document.getElementById('pageBody').innerHTML='<div class="filter-bar"><div class="filter-group"><label>'+t('year')+':</label><select id="filterYear" onchange="loadMembers()">'+YEAR_OPTS(CURRENT_YEAR)+'</select></div><div class="filter-group"><label>'+t('center')+':</label><select id="filterCenter" onchange="filterMembers()"><option value="">'+t('all')+'</option></select></div><div class="filter-group"><label>'+t('type')+':</label><select id="filterType" onchange="filterMembers()"><option value="">'+t('all')+'</option><option value="individual">'+t('individual')+'</option><option value="firm">'+t('firm')+'</option><option value="company">'+t('company')+'</option></select></div><div class="filter-group flex-grow"><input type="text" id="filterSearch" placeholder="'+t('search_any')+'" oninput="filterMembers()"></div></div><div class="card"><div class="card-body"><div class="table-responsive paged-wrap"><table class="table table-striped sortable" data-page="20"><thead><tr><th data-sort="num">#</th><th title="'+t('ho_hint')+'">'+t('at_ho')+'</th><th data-sort="text">'+t('member_id')+'</th><th data-sort="text">'+t('name')+'</th><th data-sort="text">'+t('type')+'</th><th data-sort="text">'+t('center')+'</th><th data-sort="text">'+t('mobile')+'</th>'
@@ -2712,6 +2713,7 @@
         loadCentersForFilter();
         paintMemberRows(members);
         enhanceTables(document.getElementById('pageBody'));
+        initSankalptionTooltips();
     }
 
     // Writes the rows. Kept separate from the page shell so filtering can
@@ -2739,7 +2741,11 @@
                   // The money columns only exist for someone allowed to see
                   // them; the server withholds the figures as well.
                   +(MONEY.sankalp()?'<td class="num text-primary font-bold" data-v="'+(sk.amount||0)+'">'
-                      +(sk.amount?fmt(sk.amount)+(sk.count>1?'<br><small class="text-muted">'+sk.count+' '+t('pledges')+'</small>':''):'-')+'</td>':'')
+                      +'<span class="sankalp-amount-cell" data-sankalp-breakdown="'+JSON.stringify(m.sankalp_breakdown||[]).replace(/"/g, '&quot;')+'" title="Hover to see firm-wise breakdown">'
+                        +(sk.amount?fmt(sk.amount)+(sk.count>1?'<br><small class="text-muted">'+sk.count+' '+t('pledges')+'</small>':''):'-')
+                        +'<i class="fas fa-info-circle" style="margin-left:4px;opacity:0.5;font-size:11px;"></i>'
+                      +'</span>'
+                  +'</td>':'')    
                   +(MONEY.collected()?'<td class="num text-success" data-v="'+(sk.collected||0)+'">'+(sk.collected?fmt(sk.collected):'-')+'</td>':'')
                   +(MONEY.pending()?'<td class="num text-danger" data-v="'+(sk.pending||0)+'">'+(sk.pending!==undefined&&sk.pending!==null?fmt(sk.pending):'-')+'</td>':'')
                   +'<td class="action-btns">'
@@ -3044,8 +3050,39 @@
           +'<th class="sk-bulk mid">'+t('bulk_lock')+'</th>'
           +'<th class="sk-bulk">'+t('remark')+'</th></tr></thead><tbody id="skTbody"></tbody></table></div></div></div>';
         renderDarshanPanel();
+        
+        // Sort: darshan_done FIRST (by time DESC - latest first), then others by seat
+        if(sankalps && sankalps.length){
+            sankalps.sort((a, b) => {
+                // Darshan done items always first
+                if(a.darshan_done && !b.darshan_done) return -1;
+                if(!a.darshan_done && b.darshan_done) return 1;
+                
+                // Within darshan_done group, sort by time DESC (latest first)
+                if(a.darshan_done && b.darshan_done){
+                    const timeA = new Date(a.darshan_done_time || 0).getTime();
+                    const timeB = new Date(b.darshan_done_time || 0).getTime();
+                    return timeB - timeA;  // DESC - latest first
+                }
+                
+                // Within non-darshan_done, sort by seat number
+                return (a.seat_no || 999) - (b.seat_no || 999);
+            });
+        }
+        
         paintSankalpRows(sankalps);
         enhanceTables(document.getElementById('pageBody'));
+        localStorage.removeItem('lastDarshanMemberId');
+
+        // Auto-scroll to first visible row if search was applied
+        if(search && search.trim()){
+            setTimeout(()=>{
+                const firstVisibleRow = document.querySelector('#skTbody tr:not([style*="display:none"])');
+                if(firstVisibleRow){
+                    firstVisibleRow.scrollIntoView({behavior: 'smooth', block: 'start'});
+                }
+            }, 100);
+        }
     }
 
     // ---- Guruji Darshan entry ----------------------------------------
@@ -3383,6 +3420,7 @@
         // November nobody should have to work out which year is which.
         const yThis = String(d.year), yLast = String(d.last_year);
         const dh = d.member.dharmada_type||'', dhAmt = d.member.dharmada_amount;
+        const isGuruji = true;  // Always disable in Guruji Darshan entry mode
         // Dharmada belongs to the member, not to one pledge, so every row
         // shows the same pair of boxes and typing in any of them updates the
         // rest. Putting them on the first row only left the other rows looking
@@ -3395,7 +3433,7 @@
         // "amount must be greater than zero" error.
         const dhCell = ()=>'<td class="mid">'
                 +(d.can_dharmada
-                   ?'<select class="ds-dh-type" onchange="dsSyncDharmada(this)">'
+                   ?'<select class="ds-dh-type" onchange="dsSyncDharmada(this)" '+(isGuruji ? 'disabled' : '')+' >'
                      +['','R','I/R','P','N'].map(v=>'<option value="'+v+'"'
                         +(dh===v?' selected':'')+'>'+(v||'\u2014')+'</option>').join('')
                      +'</select>'
@@ -3404,7 +3442,7 @@
               +'<td class="num">'
                 +(d.can_dharmada
                    ?'<input type="number" class="ds-amt ds-dh-amt" min="0" value="'
-                     +(dhAmt?dhAmt:'')+'" oninput="dsSyncDharmada(this)">'
+             +(dhAmt?dhAmt:'')+'" '+(isGuruji ? 'disabled' : '')+' oninput="dsSyncDharmada(this)">'
                    :'<span>'+moneyOrDash(dhAmt)+'</span>')
               +'</td>';
         body.innerHTML =
@@ -3440,8 +3478,8 @@
               +(MONEY.dharmada()?dhCell():'')
               +(MONEY.sankalp()?'<td class="num">'
                   +(d.can_edit
-                     ?'<input type="number" class="ds-amt ds-year-amt" min="0" value="'+(r.amount===null?'':r.amount)+'">'
-                     :'<span class="font-bold">'+moneyOrDash(r.amount)+'</span>')+'</td>':'')
+                     ?(isGuruji ? '<span class="font-bold">'+fmt(r.amount)+'</span>' : '<input type="number" class="ds-amt ds-year-amt" min="0" value="'+(r.amount===null?'':r.amount)+'">')
+                     :'<span class="font-bold">'+fmt(r.amount)+'</span>')+'</td>':'')
             +'</tr>').join('')
             :'<tr><td colspan="7" class="text-center text-muted py-4">'+t('no_sankalp')+'</td></tr>')
           +'</tbody>'
@@ -3450,12 +3488,12 @@
           // the totals sat a few pixels off the figures above them.
           +(d.rows.length>1?'<tfoot><tr class="font-bold"><td>'+t('total')+'</td><td></td>'
               +(MONEY.sankalp()?'<td class="num">'+moneyOrDash(T2.last_amount)+'</td>':'')
-              +(MONEY.pending()?'<td class="num text-danger">'+moneyOrDash(T2.last_pending)+'</td>':'')
+              +(MONEY.pending()?'<td class="num text-danger" style="background-color: #fff3cd; font-weight: bold;">'+moneyOrDash(T2.last_pending)+'</td>':'') 
               // No dharmada is a dash, not a zero - a zero reads as a figure
               // somebody entered.
-              +(MONEY.dharmada()?'<td></td><td class="num"><span class="ds-dh-total">'
+              +(MONEY.dharmada()?'<td class="mid"></td><td class="num"><span class="ds-dh-total">'
                   +(dhAmt?fmt(dhAmt):'\u2014')+'</span></td>':'')
-              +(MONEY.sankalp()?'<td class="num">'+moneyOrDash(T2.amount)+'</td>':'')
+              +(MONEY.sankalp()?'<td class="num">'+fmt(T2.amount)+'</td>':'')
             +'</tr></tfoot>':'')
           +'</table></div>'
           +'<div class="ds-actions">'
@@ -3541,6 +3579,10 @@
             const hit=(res.saved||[]).find(x=>x.id===row.id);
             if(hit){ row.amount=hit.amount; row.pending=hit.amount-(row.collected||0); }
         });
+        // Store member ID for Bulk Edit pre-population
+        localStorage.setItem('lastDarshanMemberId', d.member.id);
+        localStorage.setItem('lastDarshanMemberName', d.member.name);
+
         _darshanRow=null;
         // Off the strip: it is the work still to do, and the people already
         // seen are counted on the Darshan Completed button, which is where
@@ -3560,6 +3602,22 @@
 
     function toggleBulkEdit(){
         _bulkOn=!_bulkOn;
+        if(_bulkOn){
+            // Scroll to member who was just processed in Guruji Darshan
+            const lastMemberId = localStorage.getItem('lastDarshanMemberId');
+            if(lastMemberId){
+                setTimeout(()=>{
+                    const memberRow = document.querySelector(`#skTbody tr[data-member="${lastMemberId}"]`);
+                    if(memberRow){
+                        memberRow.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        memberRow.classList.add('highlight-member');
+                        setTimeout(()=>memberRow.classList.remove('highlight-member'), 3000);
+                    }
+                }, 300);
+                localStorage.removeItem('lastDarshanMemberId');
+                localStorage.removeItem('lastDarshanMemberName');
+            }
+        }
         // Full width: the sidebar goes, the filter bar stays so you can still
         // search, and the grid takes the rest of the window.
         document.body.classList.toggle('sk-bulk-mode',_bulkOn);
@@ -3733,7 +3791,7 @@
         if(!tb)return;
         tb.innerHTML = list.length===0
             ? '<tr><td colspan="12" class="text-center text-muted py-4">'+t('no_sankalp')+'</td></tr>'
-            : list.map((s,i)=>'<tr data-sk="'+s.id+'" data-member="'+s.member_id+'" class="'+(s.verified_at?'sk-locked':'')+'">'
+            : list.map((s,i)=>'<tr data-sk="'+s.id+'" data-member="'+s.member_id+'" data-darshan-done="'+(s.darshan_done?'true':'false')+'" class="'+(s.verified_at?'sk-locked':'')+'">'
                 +'<td>'+(i+1)+'</td>'
                 +'<td class="mid" data-v="'+skSeatSort(s)+'">'
                   +(s.seat_label?seatCell(s):'<span class="text-muted">\u2014</span>')+'</td>'
@@ -4267,6 +4325,18 @@
           +'<option value="yajman">'+t('yajman')+'</option>'
           +'<option value="guruji">'+t('guruji')+'</option>'
           +'<option value="general">'+t('general')+'</option></select></div></div>'
+        +'<div class="form-group gen-pass-search-container">'
+          +'<label for="genPassSearch" class="gen-pass-search-label">'+t('search')+'</label>'
+          +'<div class="gen-pass-search-wrapper">'
+            +'<i class="fas fa-search gen-pass-search-icon"></i>'
+            +'<input type="text" id="genPassSearch" class="gen-pass-search-input" placeholder="Search by name, ID, or mobile..." autocomplete="off" oninput="filterPassMembers(this.value)">'
+            +'<button type="button" class="gen-pass-search-clear" onclick="document.getElementById(\'genPassSearch\').value=\'\'; filterPassMembers(\'\')" title="Clear search">'
+              +'<i class="fas fa-times"></i>'
+            +'</button>'
+          +'</div>'
+          +'<small class="gen-pass-search-help"><i class="fas fa-info-circle"></i> Type name, member ID, or mobile number</small>'
+          +'<div class="gen-pass-status"><small><strong id="genPassShown">173</strong> shown — <strong id="genPassDone">15</strong> already have a pass</small></div>'
+        +'</div>'
         +'<div class="form-group"><label>'+t('center')+'</label>'
           +'<select id="fPassCenter" onchange="loadMembersForPass()">'
           +'<option value="">'+t('all_centers')+'</option>'+co+'</select></div>'
@@ -4324,14 +4394,15 @@
             // A member who already holds this pass type is shown with the
             // number and cannot be picked again.
             const done=m.has_pass;
-            return '<label class="checkbox-item'+(done?' done':'')+'">'
+            return '<label class="checkbox-item gen-pass-member-row'+(done?' done':'')+'" data-member-id="'+m.member_code+'" data-has-pass="'+(done?'true':'false')+'">'
               +'<input type="checkbox" name="passMember" value="'+m.id+'" data-sankalp="'+(m.sankalp_id||'')+'" '
                 +(done?'disabled':'')+' onchange="updatePassCount()">'
-              +'<span class="ci-code">'+esc(m.member_code)+'</span>'
-              +'<span class="ci-name">'+esc(m.name)+'</span>'
+              +'<span class="ci-code" data-member-id>'+esc(m.member_code)+'</span>'
+              +'<span class="ci-name" data-member-name>'+esc(m.name)+'</span>'
               +'<span class="ci-center">'+esc(m.center_name)+'</span>'
               +'<span class="ci-amt">'+(m.sankalp_amount?fmt(m.sankalp_amount):'\u2014')
                 +(m.sankalp_count>1?' <small>('+m.sankalp_count+')</small>':'')+'</span>'
+              +'<span class="ci-mobile" data-member-mobile>'+esc(m.mobile||'')+'</span>'   
               +(done?'<span class="ci-tag issued">'+t('already_issued')+' '+esc(m.pass_number)+'</span>'
                     :(m.other_pass?'<span class="ci-tag other">'+esc(m.other_pass)+'</span>':''))
               +(m.attend_at_ho?'<span class="ci-tag ho">'+t('at_ho')+'</span>':'')
@@ -6192,6 +6263,357 @@
     // made while this person was signed in would not show until they logged in
     // again. Re-read it from the server on every load instead.
     refreshPermissions();
+
+/**
+ * SMVS Chopda-Pujan Enhancements
+ * Code snippets to add to your app.html JavaScript section
+ */
+
+// ============================================================================
+// FEATURE 1: SEARCH IN GENERATE PASS MODAL
+// ============================================================================
+
+/**
+ * Initialize Generate Pass modal with search functionality
+ * Call this when the modal opens
+ */
+function initGeneratePassModal() {
+    const searchInput = document.getElementById('genPassSearch');
+    if (!searchInput) return;
+    
+    // Clear previous search
+    searchInput.value = '';
+    
+    // Add event listeners
+    searchInput.addEventListener('input', (e) => {
+        filterPassMembers(e.target.value);
+    });
+    
+    // Clear button functionality
+    const searchClear = document.querySelector('.gen-pass-search-clear');
+    if (searchClear) {
+        searchClear.addEventListener('click', () => {
+            searchInput.value = '';
+            filterPassMembers('');
+            searchInput.focus();
+        });
+    }
+    
+    // Focus search on modal open
+    setTimeout(() => searchInput.focus(), 100);
+}
+
+/**
+ * Filter members in Generate Pass modal
+ * @param {string} searchText - Text to search for
+ */
+function filterPassMembers(searchText) {
+    const searchLower = searchText.toLowerCase().trim();
+    const memberRows = document.querySelectorAll('.gen-pass-member-row');
+    
+    if (!memberRows.length) return;
+    
+    let visibleCount = 0;
+    let alreadyHavePassCount = 0;
+    
+    memberRows.forEach(row => {
+        // Get searchable text from the row
+        const memberIDEl = row.querySelector('[data-member-id]');
+        const memberNameEl = row.querySelector('[data-member-name]');
+        const memberMobileEl = row.querySelector('[data-member-mobile]');
+        
+        const memberID = memberIDEl ? memberIDEl.textContent.toLowerCase() : '';
+        const memberName = memberNameEl ? memberNameEl.textContent.toLowerCase() : '';
+        const memberMobile = memberMobileEl ? memberMobileEl.textContent.toLowerCase() : '';
+        const hasPass = row.dataset.hasPass === 'true';
+        
+        // Check if this row matches search
+        const matches = !searchText || 
+                       memberID.includes(searchLower) ||
+                       memberName.includes(searchLower) ||
+                       memberMobile.includes(searchLower);
+        
+        // Show/hide row
+        if (matches) {
+            row.style.display = '';
+            visibleCount++;
+            if (hasPass) alreadyHavePassCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    // Update status text
+    updateGeneratePassStatus(visibleCount, alreadyHavePassCount);
+    
+    // Show "no results" message if needed
+    const noResultsMsg = document.querySelector('.gen-pass-no-results');
+    if (searchText && visibleCount === 0) {
+        if (!noResultsMsg) {
+            const msg = document.createElement('div');
+            msg.className = 'gen-pass-no-results alert alert-info';
+            msg.textContent = `No members found matching "${searchText}"`;
+            const memberList = document.querySelector('.gen-pass-member-list');
+            if (memberList) memberList.prepend(msg);
+        }
+        if (noResultsMsg) noResultsMsg.style.display = '';
+    } else if (noResultsMsg) {
+        noResultsMsg.style.display = 'none';
+    }
+}
+
+/**
+ * Update the member count display in Generate Pass modal
+ */
+function updateGeneratePassStatus(visibleCount, alreadyHaveCount) {
+    const statusEl = document.querySelector('.gen-pass-status');
+    if (!statusEl) return;
+    
+    const totalShown = visibleCount;
+    const readyToSelect = visibleCount - alreadyHaveCount;
+    
+    statusEl.innerHTML = `
+        <small>
+            <strong>${totalShown}</strong> shown 
+            — <strong>${alreadyHaveCount}</strong> already have a pass
+            — <strong>${readyToSelect}</strong> ready to select
+        </small>
+    `;
+}
+
+/**
+ * Clear Generate Pass search when modal closes
+ * Call this on modal close
+ */
+function clearGeneratePassSearch() {
+    const searchEl = document.getElementById('genPassSearch');
+    if (searchEl) {
+        searchEl.value = '';
+    }
+    const noResultsMsg = document.querySelector('.gen-pass-no-results');
+    if (noResultsMsg) {
+        noResultsMsg.remove();
+    }
+}
+
+// ============================================================================
+// FEATURE 2: SANKALP BREAKDOWN TOOLTIP
+// ============================================================================
+
+/**
+ * Initialize sankalp tooltips for Members table
+ * Call this after the members table is rendered
+ */
+function initSankalptionTooltips() {
+    document.querySelectorAll('[data-sankalp-breakdown]').forEach(el => {
+        el.style.cursor = 'help';
+        
+        el.addEventListener('mouseenter', (e) => showSankalptionBreakdown(e));
+        el.addEventListener('mouseleave', (e) => hideSankalptionBreakdown(e));
+        el.addEventListener('touchstart', (e) => showSankalptionBreakdown(e));
+        el.addEventListener('touchend', (e) => hideSankalptionBreakdown(e));
+    });
+}
+
+/**
+ * Show sankalp breakdown tooltip on hover
+ */
+function showSankalptionBreakdown(event) {
+    const target = event.currentTarget;
+    let breakdownData = target.getAttribute('data-sankalp-breakdown');
+    if (!breakdownData) return;
+    try {
+        // Unescape HTML entities back to JSON format
+        breakdownData = breakdownData.replace(/&quot;/g, '"');
+        const items = JSON.parse(breakdownData);
+
+        if (!items || !items.length) return;
+        
+        // Remove existing tooltip
+        const existing = target._sankalptionTooltip;
+        if (existing) existing.remove();
+        
+        // Create tooltip HTML
+        let html = '<div class="sankalp-tooltip-header">';
+        html += '<i class="fas fa-building"></i> Firm-wise Breakdown';
+        html += '</div>';
+        html += '<div class="sankalp-tooltip-items">';
+        
+        let total = 0;
+        items.forEach(item => {
+            const amount = parseFloat(item.amount) || 0;
+            total += amount;
+            html += `
+                <div class="sankalp-item">
+                    <span class="sankalp-firm" title="${item.name}">
+                        ${item.name}
+                    </span>
+                    <span class="sankalp-amount">
+                        ₹${amount.toLocaleString('en-IN', {maximumFractionDigits: 0})}
+                    </span>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        
+        // Add total line if multiple items
+        if (items.length > 1) {
+            html += `
+                <div class="sankalp-tooltip-total">
+                    <strong>Total:</strong>
+                    <span>₹${total.toLocaleString('en-IN', {maximumFractionDigits: 0})}</span>
+                </div>
+            `;
+        }
+        
+        // Create tooltip element
+        const tooltip = document.createElement('div');
+        tooltip.className = 'sankalp-tooltip';
+        tooltip.innerHTML = html;
+        document.body.appendChild(tooltip);
+        
+        // Position tooltip
+        positionTooltip(target, tooltip);
+        
+        // Store reference
+        target._sankalptionTooltip = tooltip;
+        
+        // Show with fade-in
+        requestAnimationFrame(() => {
+            tooltip.classList.add('show');
+        });
+        
+    } catch (e) {
+        console.error('Error parsing sankalp breakdown:', e);
+    }
+}
+
+/**
+ * Hide sankalp breakdown tooltip
+ */
+function hideSankalptionBreakdown(event) {
+    const target = event.currentTarget;
+    const tooltip = target._sankalptionTooltip;
+    
+    if (!tooltip) return;
+    
+    tooltip.classList.remove('show');
+    setTimeout(() => {
+        tooltip?.remove();
+        target._sankalptionTooltip = null;
+    }, 150);
+}
+
+/**
+ * Position tooltip near element without going off-screen
+ */
+function positionTooltip(element, tooltip) {
+    const rect = element.getBoundingClientRect();
+    const tooltipHeight = 140; // Approximate height
+    const gap = 8;
+    
+    // Try to position above
+    let top = rect.top - tooltipHeight - gap;
+    let left = rect.left + rect.width / 2;
+    
+    // If not enough space above, position below
+    if (top < 10) {
+        top = rect.bottom + gap;
+    }
+    
+    tooltip.style.position = 'fixed';
+    tooltip.style.top = top + 'px';
+    tooltip.style.left = left + 'px';
+    tooltip.style.transform = 'translateX(-50%)';
+    
+    // Check horizontal bounds
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const minLeft = 8;
+    const maxLeft = window.innerWidth - tooltipRect.width - 8;
+    
+    if (tooltipRect.left < minLeft) {
+        tooltip.style.left = (left + (minLeft - tooltipRect.left)) + 'px';
+    }
+    if (tooltipRect.right > window.innerWidth - minLeft) {
+        tooltip.style.left = (left - (tooltipRect.right - (window.innerWidth - minLeft))) + 'px';
+    }
+}
+
+/**
+ * Clean up all sankalp tooltips (call on page unload)
+ */
+function cleanupSankalptionTooltips() {
+    document.querySelectorAll('.sankalp-tooltip').forEach(tooltip => {
+        tooltip.remove();
+    });
+    document.querySelectorAll('[data-sankalp-breakdown]').forEach(el => {
+        el._sankalptionTooltip = null;
+    });
+}
+
+// ============================================================================
+// HELPER: Integrate with existing modal handlers
+// ============================================================================
+
+/**
+ * Patch existing openModal function to initialize search
+ * Add this to your modal-opening code:
+ */
+function patchModalHandlers() {
+    const originalOpenModal = window.openModal;
+    
+    window.openModal = function(title, content, options) {
+        // Call original function
+        originalOpenModal(title, content, options);
+        
+        // Initialize enhancements based on modal title
+        if (title && title.includes('Generate Pass')) {
+            setTimeout(() => {
+                initGeneratePassModal();
+                initSankalptionTooltips();
+            }, 100);
+        }
+    };
+    
+    const originalCloseModal = window.closeModal;
+    
+    window.closeModal = function() {
+        clearGeneratePassSearch();
+        cleanupSankalptionTooltips();
+        
+        // Call original function
+        originalCloseModal();
+    };
+}
+
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+/**
+ * Call this when page loads or content updates
+ */
+function initSMVSEnhancements() {
+    // Initialize tooltips for any sankalp breakdowns on page
+    initSankalptionTooltips();
+    
+    // Patch modal handlers if not already done
+    if (!window._smvsEnhancementsInitialized) {
+        patchModalHandlers();
+        window._smvsEnhancementsInitialized = true;
+    }
+}
+
+// Run on DOMContentLoaded
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSMVSEnhancements);
+} else {
+    initSMVSEnhancements();
+}
+
+// Re-initialize after dynamic content loads
+document.addEventListener('page-loaded', initSMVSEnhancements);
     </script>
 </body>
 </html>
